@@ -1,0 +1,65 @@
+name: update profile assets
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  generate:
+    permissions:
+      contents: write
+    concurrency:
+      group: profile-assets
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+
+      - name: generate pacman contribution graph
+        uses: abozanona/pacman-contribution-graph@v5.3.2
+        with:
+          github_user_name: ${{ github.repository_owner }}
+          games: 'pacman'
+          hide_month_labels: 'true'
+
+      - name: fill banner with github stats
+        env:
+          GITHUB_LOGIN: ${{ github.repository_owner }}
+          # Com o secret PROFILE_STATS_TOKEN (PAT classic com read:user), o banner
+          # inclui as contribuições privadas; sem ele, usa o token padrão (só públicas).
+          GH_TOKEN: ${{ secrets.PROFILE_STATS_TOKEN || secrets.GITHUB_TOKEN }}
+        run: python3 scripts/generate_stats.py
+
+      - name: locate generated svgs
+        run: |
+          mkdir -p output
+          find . -maxdepth 3 -name "pacman-contribution-graph*.svg" -type f -exec mv {} output/ \; 2>/dev/null || true
+          echo "=== output dir ==="
+          ls -la output/
+
+      - name: verify svgs were generated
+        run: |
+          for f in output/pacman-contribution-graph.svg output/banner.svg; do
+            test -s "$f" || { echo "::error::$f was not generated"; exit 1; }
+            echo "ok: $f ($(wc -c < "$f") bytes)"
+          done
+
+      - name: commit and push
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add output/*.svg
+          if git diff --cached --quiet; then
+            echo "no changes to commit"
+          else
+            git commit -m "chore: atualiza assets do perfil [ci skip]"
+            git push origin HEAD:main
+          fi
+
